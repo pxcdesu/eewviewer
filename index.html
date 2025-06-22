@@ -7,52 +7,76 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
-    body, html { height:100%; font-family:'Segoe UI',sans-serif; background:#121212; color:#eee; }
+    body, html { height:100%; font-family:'Segoe UI',sans-serif; background:#111; color:#eee; }
     #map { position:absolute; top:0; left:0; width:100%; height:100%; z-index:1; }
     #wave-canvas { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2; }
 
-    /* Windows11風タブ */
-    .tabs { position:absolute; bottom:0; left:50%; transform:translateX(-50%); display:flex; background:rgba(40,40,40,0.9); border-radius:12px 12px 0 0; overflow:hidden; z-index:1000; }
-    .tab { padding:10px 20px; cursor:pointer; color:#ccc; }
-    .tab.active { background:#1e1e1e; color:#fff; }
-    .panel { display:none; position:absolute; background:rgba(20,20,20,0.9); overflow:auto; z-index:1000; }
+    .tabs { position:absolute; bottom:0; left:50%; transform:translateX(-50%); display:flex; background:#1e1e1e; border-radius:12px 12px 0 0; overflow:hidden; box-shadow:0 -2px 10px rgba(0,0,0,0.5); z-index:1000; }
+    .tab { padding:10px 20px; cursor:pointer; color:#aaa; transition:all 0.3s ease; }
+    .tab:hover { background:#2a2a2a; color:#fff; }
+    .tab.active { background:#333; color:#fff; }
+    .panel { display:none; position:absolute; background:rgba(15,15,15,0.95); overflow:auto; z-index:1000; border-radius:8px; box-shadow:0 0 10px rgba(0,0,0,0.5); }
     .panel.active { display:block; }
 
-    /* 各パネル配置 */
-    #strong { bottom:40px; left:50%; transform:translateX(-50%); width:300px; max-height:40%; }
-    #quake-list { top:10px; left:10px; width:260px; bottom:60px; }
-    #tsunami { bottom:40px; right:10px; width:300px; max-height:40%; }
+    #strong { bottom:50px; left:50%; transform:translateX(-50%); width:300px; max-height:45%; }
+    #quake-list { top:10px; left:10px; width:280px; bottom:60px; }
+    #tsunami { bottom:50px; right:10px; width:300px; max-height:45%; }
 
-    .list-item { padding:8px 12px; border-bottom:1px solid #333; cursor:pointer; }
+    .list-item { padding:10px 14px; border-bottom:1px solid #444; cursor:pointer; font-size:14px; }
     .list-item:hover { background:#2a2a2a; }
-    .detail { padding:12px; font-size:0.9rem; line-height:1.5; }
+    .detail { padding:14px; font-size:14px; line-height:1.6; }
     #depth-canvas { width:100%; height:150px; background:#111; }
+
+    #clock {
+      position:absolute; top:10px; left:10px; font-size:14px; color:#fff; background:#1e1e1e; padding:6px 10px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.5);
+    }
+    #clock-dot {
+      display:inline-block; width:6px; height:6px; background:#fff; border-radius:50%; margin-left:6px; animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    #intensity-legend {
+      position: absolute; bottom: 80px; left: 10px; z-index: 999; background: rgba(0,0,0,0.5); padding: 8px 10px; border-radius: 6px; font-size: 12px; color: #fff;
+    }
+    #intensity-legend span {
+      display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: middle; border-radius: 50%; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <canvas id="wave-canvas"></canvas>
+  <div id="clock">--:--:-- <span id="clock-dot"></span></div>
 
-  <!-- タブ -->
+  <div id="intensity-legend">
+    <div><span style="background:#888"></span> 震度1未満</div>
+    <div><span style="background:#00f"></span> 震度1</div>
+    <div><span style="background:#0f0"></span> 震度2</div>
+    <div><span style="background:#ff0"></span> 震度3</div>
+    <div><span style="background:#f90"></span> 震度4</div>
+    <div><span style="background:#f00"></span> 震度5弱</div>
+    <div><span style="background:#c00"></span> 震度5強</div>
+    <div><span style="background:#800"></span> 震度6弱以上</div>
+  </div>
+
   <div class="tabs">
     <div class="tab active" data-panel="strong">強振モニター</div>
     <div class="tab" data-panel="quake-list">地震情報</div>
     <div class="tab" data-panel="tsunami">津波情報</div>
   </div>
 
-  <!-- パネル: 強振モニター -->
   <div class="panel active" id="strong">
     <div id="strong-info" class="detail">強振情報を取得中…</div>
   </div>
 
-  <!-- パネル: 地震情報一覧 -->
   <div class="panel" id="quake-list">
     <div id="past-list"></div>
     <div id="past-detail" class="detail"></div>
     <canvas id="depth-canvas"></canvas>
   </div>
 
-  <!-- パネル: 津波情報 -->
   <div class="panel" id="tsunami">
     <div id="tsunami-info" class="detail">津波情報を取得中…</div>
   </div>
@@ -61,133 +85,54 @@
   <script>
     const map = L.map('map').setView([36.2,138.2],5);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-    // プレート境界線
-    fetch('https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json')
-      .then(r => r.json()).then(d => L.geoJSON(d, { style:{ color:'#ff0088', weight:1, dashArray:'3' } }).addTo(map));
 
-    // 波形アニメーション準備
     const canvas = document.getElementById('wave-canvas');
-    const ctx = canvas.getContext('2d'); let cw, ch;
-    function resize(){ cw = canvas.width = window.innerWidth; ch = canvas.height = window.innerHeight; }
-    window.addEventListener('resize', resize); resize();
+    const ctx = canvas.getContext('2d');
+    let cw, ch;
+    function resizeCanvas() {
+      canvas.width = cw = window.innerWidth;
+      canvas.height = ch = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
 
-    // データ管理
-    let history = [], latest = null, detailInfo = null;
-    let userPos = null;
+    function updateClock() {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      document.getElementById('clock').childNodes[0].nodeValue = `${hh}:${mm}:${ss} `;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
 
-    // ユーザー位置取得
-    navigator.geolocation?.getCurrentPosition(p => {
-      userPos = [p.coords.latitude, p.coords.longitude];
-      L.marker(userPos).addTo(map).bindPopup('あなたの位置');
-    });
-
-    // タブ切り替え
-    document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
-      t.classList.add('active'); document.getElementById(t.dataset.panel).classList.add('active');
+    const tabs = document.querySelectorAll('.tab');
+    const panels = document.querySelectorAll('.panel');
+    tabs.forEach(tab => tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      panels.forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(tab.dataset.panel).classList.add('active');
     }));
 
-    // リスト読み込み
-    async function loadList(){
-      try {
-        const list = await (await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')).json();
-        history = list.slice(0,30);
-        latest = history[0];
-        updatePastList();
-        await showDetail(latest);
-      } catch(e){ console.error('リスト取得失敗', e); }
+    function drawWaveRing(x, y, radius, color) {
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
-    function updatePastList(){
-      const el = document.getElementById('past-list'); el.innerHTML = '';
-      history.forEach(h => {
-        const item = document.createElement('div');
-        item.className = 'list-item';
-        item.textContent = `${h.time} M${h.mag}`;
-        item.onclick = () => showDetail(h);
-        el.appendChild(item);
-      });
+    let waveTime = 0;
+    function animateWaves() {
+      ctx.clearRect(0, 0, cw, ch);
+      waveTime += 1;
+      const center = map.latLngToContainerPoint([36.2, 138.2]);
+      drawWaveRing(center.x, center.y, waveTime * 5, 'rgba(0,0,255,0.4)');
+      drawWaveRing(center.x, center.y, waveTime * 3.5, 'rgba(255,0,0,0.3)');
+      if (waveTime * 5 > Math.max(cw, ch)) waveTime = 0;
+      requestAnimationFrame(animateWaves);
     }
-
-    // 詳細表示
-    async function showDetail(h){
-      try {
-        const file = h.json || h.filename;
-        const d = await (await fetch(`https://www.jma.go.jp/bosai/quake/data/${file}`)).json();
-        detailInfo = d;
-        latest = h;
-        renderMap(d);
-        renderDetail(d);
-        renderStrong(d);
-        renderTsunami(d);
-      } catch(e){ console.error('詳細取得失敗', e); }
-    }
-
-    // 地図レンダリング
-    function renderMap(d){
-      const lat = d.hypocenter.latitude, lon = d.hypocenter.longitude;
-      map.setView([lat, lon], 6);
-      L.marker([lat, lon]).addTo(map).bindPopup('震源').openPopup();
-      // 震度分布表示
-      if(d.intensity.stations){
-        d.intensity.stations.forEach(s=>{
-          L.circle([s.lat, s.lon], { radius:5000, color:'#f00', fillOpacity:0.3 }).addTo(map);
-        });
-      }
-    }
-
-    // 詳細パネル
-    function renderDetail(d){
-      const el = document.getElementById('past-detail');
-      el.innerHTML =
-        `<p>震源地：${d.hypocenter.name}</p>`+
-        `<p>マグニチュード：${d.hypocenter.magnitude}</p>`+
-        `<p>最大震度：${d.intensity.maxInt}</p>`;
-      drawDepth(d.hypocenter.depth);
-    }
-
-    // 断面図
-    function drawDepth(depth){
-      const cvs = document.getElementById('depth-canvas'); const c = cvs.getContext('2d');
-      cvs.width = cvs.offsetWidth; cvs.height = cvs.offsetHeight;
-      c.clearRect(0,0,cvs.width,cvs.height);
-      const y = (depth / 700) * cvs.height; // 最大700kmでスケール
-      c.fillStyle = '#0ff'; c.fillRect(cvs.width/2-2, y, 4, 4);
-      c.fillStyle = '#fff'; c.fillText(`深さ：${depth}km`, 10, 20);
-    }
-
-    // 強振モニター
-    function renderStrong(d){
-      const el = document.getElementById('strong-info'); el.innerHTML = '';
-      if(!d.intensity.stations){ el.textContent = '強振情報なし'; return; }
-      d.intensity.stations.forEach(s=>{
-        const p = document.createElement('p'); p.textContent = `${s.name||s.code}: ${s.maxInt}`;
-        el.appendChild(p);
-      });
-    }
-
-    // 津波情報
-    function renderTsunami(d){
-      const el = document.getElementById('tsunami-info');
-      el.textContent = d.tsunami?.message || '津波情報なし';
-    }
-
-    // 波形アニメ
-    function animate(){
-      requestAnimationFrame(animate);
-      ctx.clearRect(0,0,cw,ch);
-      if(!detailInfo) return;
-      const elapsed = (Date.now() - new Date(latest.time)) / 1000;
-      const pR = elapsed * 6000; const sR = elapsed * 3500;
-      const pt = map.latLngToContainerPoint([detailInfo.hypocenter.latitude, detailInfo.hypocenter.longitude]);
-      ctx.strokeStyle = 'rgba(0,0,255,0.3)'; ctx.beginPath(); ctx.arc(pt.x,pt.y,pR/50000*map.getZoom(),0,2*Math.PI); ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,0,0,0.2)'; ctx.beginPath(); ctx.arc(pt.x,pt.y,sR/50000*map.getZoom(),0,2*Math.PI); ctx.stroke();
-    }
-    animate();
-
-    // 初期ロード
-    loadList(); setInterval(loadList,60000);
+    animateWaves();
   </script>
 </body>
 </html>
