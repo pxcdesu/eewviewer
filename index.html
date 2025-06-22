@@ -3,19 +3,163 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>High‑Precision EEW Viewer</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>JMA EEW Viewer</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * {margin:0; padding:0; box-sizing:border-box;}
+    body, html {height:100%; font-family:'Segoe UI',sans-serif; background:#121212; color:#eee;}
+    #map {position:absolute; top:0; left:0; width:100%; height:100%; z-index:1;}
+    .info-panel {
+      position:absolute;
+      top:10px; left:50%; transform:translateX(-50%);
+      background: rgba(30,30,30,0.9);
+      padding: 10px 20px; border-radius:12px; min-width:260px;
+      z-index:1000; box-shadow:0 0 10px #00000055;
+    }
+    .info-panel h1 {font-size:1.3rem; margin-bottom:8px; color:#00d0ff; text-align:center;}
+    #quake-info {font-size:0.95rem; line-height:1.6;}
+    #wave-canvas {
+      position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;
+      z-index:2;
+    }
+    @media (max-width:600px) {
+      .info-panel {width:90%; left:5%; transform:none;}
+      .info-panel h1 {font-size:1.1rem;}
+    }
+  </style>
 </head>
 <body>
   <div id="map"></div>
+  <canvas id="wave-canvas"></canvas>
   <div class="info-panel">
-    <h1>緊急地震速報リアルタイムビューア</h1>
+    <h1>JMA 地震速報ビューア</h1>
     <div id="quake-info">情報取得中…</div>
   </div>
-  <canvas id="wave-canvas"></canvas>
-
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js"></script>
+  <script>
+    const map = L.map('map').setView([36.2,138.2], 5);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    // プレート境界線描画
+    fetch('https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json')
+      .then(res => res.json())
+      .then(data => {
+        L.geoJSON(data, {
+          style: { color: '#ff0088', weight: 1, dashArray: '3' }
+        }).addTo(map);
+      });
+
+    let quakeInfo = null, detailInfo = null, userPos = null, originTime = null;
+
+    navigator.geolocation?.getCurrentPosition(pos => {
+      userPos = [pos.coords.latitude, pos.coords.longitude];
+      L.marker(userPos).addTo(map).bindPopup('あなたの位置').openPopup();
+    });
+
+    function getDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    async function fetchJMA() {
+      try {
+        const list = await (await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')).json();
+        if (!list[0]) return;
+        const file = list[0].json;
+        const detail = await (await fetch(`https://www.jma.go.jp/bosai/quake/data/${file}`)).json();
+
+        quakeInfo = list[0];
+        detailInfo = detail;
+        originTime = new Date(detail.time || quakeInfo.time).getTime();
+
+        updateMap();
+        showInfo();
+      } catch (e) {
+        console.error('取得失敗:', e);
+        document.getElementById('quake-info').textContent = '地震情報の取得に失敗しました。';
+      }
+    }
+
+    function updateMap() {
+      if (!detailInfo || !detailInfo.hypocenter) return;
+      const lat = detailInfo.hypocenter.latitude;
+      const lon = detailInfo.hypocenter.longitude;
+      if (!lat || !lon) return;
+
+      L.marker([lat, lon]).addTo(map).bindPopup(`震源：${detailInfo.hypocenter.name}`).openPopup();
+
+      const colors = { '1': '#0f0', '2': '#cc0', '3': '#f90', '4': '#f00', '5-': '#f06', '5+': '#d06', '6-': '#909', '6+': '#703', '7': '#000' };
+      (detailInfo.intensity?.prefectures || []).forEach(pref => {
+        (pref.areas || []).forEach(area => {
+          if (!area.maxInt || !area.name) return;
+          const intensity = area.maxInt;
+          const color = colors[intensity] || '#888';
+          if (area.centroid?.lat && area.centroid?.lon) {
+            L.circle([area.centroid.lat, area.centroid.lon], {
+              radius: 8000,
+              color,
+              fillOpacity: 0.5
+            }).addTo(map).bindPopup(`${area.name}：震度 ${intensity}`);
+          }
+        });
+      });
+    }
+
+    function showInfo() {
+      const el = document.getElementById('quake-info');
+      const time = quakeInfo.time || detailInfo.time;
+      const mag = detailInfo.magnitude?.value || quakeInfo.mag;
+      const epi = detailInfo.hypocenter?.name || '不明';
+      el.innerHTML = `
+        <p>発生時刻：${time}</p>
+        <p>震源地：${epi}</p>
+        <p>マグニチュード：${mag}</p>
+      `;
+      if (userPos && detailInfo.hypocenter?.latitude) {
+        const d = getDistance(userPos[0], userPos[1], detailInfo.hypocenter.latitude, detailInfo.hypocenter.longitude);
+        const I = Math.max(0, Math.floor(mag * 2 - Math.log10(d) * 1.5));
+        el.innerHTML += `<p>推定震度：<strong>${I}</strong></p>`;
+      }
+    }
+
+    // P波/S波アニメーション描画
+    const canvas = document.getElementById('wave-canvas');
+    const ctx = canvas.getContext('2d');
+    let cw, ch;
+    function resizeCanvas() {
+      cw = canvas.width = window.innerWidth;
+      ch = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      ctx.clearRect(0, 0, cw, ch);
+      if (!originTime || !detailInfo?.hypocenter?.latitude) return;
+      const elapsed = (Date.now() - originTime) / 1000;
+      const pR = elapsed * 6 * 1000;
+      const sR = elapsed * 3.5 * 1000;
+      const orig = map.latLngToContainerPoint([detailInfo.hypocenter.latitude, detailInfo.hypocenter.longitude]);
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(0,0,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.arc(orig.x, orig.y, pR * map.getZoom() / 50000, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255,0,0,0.2)';
+      ctx.lineWidth = 2;
+      ctx.arc(orig.x, orig.y, sR * map.getZoom() / 50000, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+    animate();
+
+    fetchJMA();
+    setInterval(fetchJMA, 1000);
+  </script>
 </body>
 </html>
