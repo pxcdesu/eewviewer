@@ -20,7 +20,7 @@
 
     /* 各パネル配置 */
     #strong { bottom:40px; left:50%; transform:translateX(-50%); width:300px; max-height:40%; }
-    #quake-list { top:10px; left:10px; width:260px; bottom:60px; overflow:auto; }
+    #quake-list { top:10px; left:10px; width:260px; bottom:60px; }
     #tsunami { bottom:40px; right:10px; width:300px; max-height:40%; }
 
     .list-item { padding:8px 12px; border-bottom:1px solid #333; cursor:pointer; }
@@ -61,94 +61,133 @@
   <script>
     const map = L.map('map').setView([36.2,138.2],5);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    // プレート境界線
     fetch('https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json')
-      .then(r=>r.json()).then(d=>L.geoJSON(d,{style:{color:'#ff0088',weight:1,dashArray:'3'}}).addTo(map));
+      .then(r => r.json()).then(d => L.geoJSON(d, { style:{ color:'#ff0088', weight:1, dashArray:'3' } }).addTo(map));
 
+    // 波形アニメーション準備
     const canvas = document.getElementById('wave-canvas');
     const ctx = canvas.getContext('2d'); let cw, ch;
-    function resize(){ cw=canvas.width=window.innerWidth; ch=canvas.height=window.innerHeight; }
-    window.addEventListener('resize',resize); resize();
+    function resize(){ cw = canvas.width = window.innerWidth; ch = canvas.height = window.innerHeight; }
+    window.addEventListener('resize', resize); resize();
 
-    let history=[], latest=null, detailInfo=null;
-    let userPos=null;
+    // データ管理
+    let history = [], latest = null, detailInfo = null;
+    let userPos = null;
 
-    navigator.geolocation?.getCurrentPosition(p=>{
-      userPos=[p.coords.latitude,p.coords.longitude];
+    // ユーザー位置取得
+    navigator.geolocation?.getCurrentPosition(p => {
+      userPos = [p.coords.latitude, p.coords.longitude];
       L.marker(userPos).addTo(map).bindPopup('あなたの位置');
     });
 
-    function dist(a,b,c,d){ const R=6371; const dLat=(c-a)*Math.PI/180; const dLon=(d-b)*Math.PI/180;
-      const A=Math.sin(dLat/2)**2 + Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dLon/2)**2;
-      return R*2*Math.atan2(Math.sqrt(A),Math.sqrt(1-A)); }
-
-    async function loadList(){
-      const list=await (await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')).json();
-      history=list.slice(0,30); latest=history[0];
-      updatePastList(); showDetail(latest);
-    }
-    function updatePastList(){ const el=document.getElementById('past-list'); el.innerHTML='';
-      history.forEach(h=>{ const d=document.createElement('div'); d.className='list-item'; d.textContent=`${h.time} M${h.mag}`;
-        d.onclick=()=>showDetail(h);
-        el.appendChild(d);
-      }); }
-
-    async function showDetail(h){
-      // fetch detail JSON
-      const d=await (await fetch(`https://www.jma.go.jp/bosai/quake/data/${h.json}`)).json();
-      detailInfo=d; latest=h;
-      // map marker
-      const lat=d.hypocenter.latitude, lon=d.hypocenter.longitude;
-      map.setView([lat,lon],6);
-      L.marker([lat,lon]).addTo(map).bindPopup('震源').openPopup();
-      // detail
-      const el=document.getElementById('past-detail');
-      el.innerHTML=`<p>震源地：${d.hypocenter.name}</p>
-        <p>マグニチュード：${d.hypocenter.magnitude}</p>
-        <p>最大震度：${d.intensity.maxInt}</p>`;
-      // depth
-      drawDepth(d.hypocenter.depth);
-      // intensity stations
-      if(d.intensity.stations){ d.intensity.stations.forEach(s=>{
-        L.circle([s.lat,s.lon],{radius:5000,color:'#f00',fillOpacity:0.3}).addTo(map);
-      }); }
-      updateStrong();
-      updateTsunami();
-    }
-
-    function drawDepth(depth){ const cvs=document.getElementById('depth-canvas'); const c=cvs.getContext('2d');
-      cvs.width=cvs.offsetWidth; cvs.height=cvs.offsetHeight; c.clearRect(0,0,cvs.width,cvs.height);
-      const y=depth/cvs.height*cvs.height; c.fillStyle='#0ff'; c.fillRect(cvs.width/2-2,y,4,4);
-      c.fillText(`深さ：${depth}km`,10,20);
-    }
-
-    function updateStrong(){ const el=document.getElementById('strong-info'); el.innerHTML='';
-      if(!detailInfo?.intensity?.stations){ el.textContent='強振情報なし'; return; }
-      detailInfo.intensity.stations.forEach(s=>{
-        const item=document.createElement('p'); item.textContent=`${s.name || s.code}: ${s.maxInt}`;
-        el.appendChild(item);
-        L.circle([s.lat,s.lon],{radius:3000,color:'#0f0',fillOpacity:0.4}).addTo(map);
-      }); }
-
-    function updateTsunami(){ const el=document.getElementById('tsunami-info');
-      el.textContent='津波情報なし'; /* 実装APIあればここで置き換え */ }
-
-    // tabs
-    document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
-      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    // タブ切り替え
+    document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
       t.classList.add('active'); document.getElementById(t.dataset.panel).classList.add('active');
     }));
 
-    loadList(); setInterval(loadList,60000);
+    // リスト読み込み
+    async function loadList(){
+      try {
+        const list = await (await fetch('https://www.jma.go.jp/bosai/quake/data/list.json')).json();
+        history = list.slice(0,30);
+        latest = history[0];
+        updatePastList();
+        await showDetail(latest);
+      } catch(e){ console.error('リスト取得失敗', e); }
+    }
+
+    function updatePastList(){
+      const el = document.getElementById('past-list'); el.innerHTML = '';
+      history.forEach(h => {
+        const item = document.createElement('div');
+        item.className = 'list-item';
+        item.textContent = `${h.time} M${h.mag}`;
+        item.onclick = () => showDetail(h);
+        el.appendChild(item);
+      });
+    }
+
+    // 詳細表示
+    async function showDetail(h){
+      try {
+        const file = h.json || h.filename;
+        const d = await (await fetch(`https://www.jma.go.jp/bosai/quake/data/${file}`)).json();
+        detailInfo = d;
+        latest = h;
+        renderMap(d);
+        renderDetail(d);
+        renderStrong(d);
+        renderTsunami(d);
+      } catch(e){ console.error('詳細取得失敗', e); }
+    }
+
+    // 地図レンダリング
+    function renderMap(d){
+      const lat = d.hypocenter.latitude, lon = d.hypocenter.longitude;
+      map.setView([lat, lon], 6);
+      L.marker([lat, lon]).addTo(map).bindPopup('震源').openPopup();
+      // 震度分布表示
+      if(d.intensity.stations){
+        d.intensity.stations.forEach(s=>{
+          L.circle([s.lat, s.lon], { radius:5000, color:'#f00', fillOpacity:0.3 }).addTo(map);
+        });
+      }
+    }
+
+    // 詳細パネル
+    function renderDetail(d){
+      const el = document.getElementById('past-detail');
+      el.innerHTML =
+        `<p>震源地：${d.hypocenter.name}</p>`+
+        `<p>マグニチュード：${d.hypocenter.magnitude}</p>`+
+        `<p>最大震度：${d.intensity.maxInt}</p>`;
+      drawDepth(d.hypocenter.depth);
+    }
+
+    // 断面図
+    function drawDepth(depth){
+      const cvs = document.getElementById('depth-canvas'); const c = cvs.getContext('2d');
+      cvs.width = cvs.offsetWidth; cvs.height = cvs.offsetHeight;
+      c.clearRect(0,0,cvs.width,cvs.height);
+      const y = (depth / 700) * cvs.height; // 最大700kmでスケール
+      c.fillStyle = '#0ff'; c.fillRect(cvs.width/2-2, y, 4, 4);
+      c.fillStyle = '#fff'; c.fillText(`深さ：${depth}km`, 10, 20);
+    }
+
+    // 強振モニター
+    function renderStrong(d){
+      const el = document.getElementById('strong-info'); el.innerHTML = '';
+      if(!d.intensity.stations){ el.textContent = '強振情報なし'; return; }
+      d.intensity.stations.forEach(s=>{
+        const p = document.createElement('p'); p.textContent = `${s.name||s.code}: ${s.maxInt}`;
+        el.appendChild(p);
+      });
+    }
+
+    // 津波情報
+    function renderTsunami(d){
+      const el = document.getElementById('tsunami-info');
+      el.textContent = d.tsunami?.message || '津波情報なし';
+    }
 
     // 波形アニメ
-    function animate(){ requestAnimationFrame(animate); ctx.clearRect(0,0,cw,ch);
-      if(!latest) return; const t=(Date.now()-new Date(latest.time))/1000;
-      const p=t*6*1000, s=t*3.5*1000;
-      const pt=map.latLngToContainerPoint([detailInfo.hypocenter.latitude,detailInfo.hypocenter.longitude]);
-      ctx.strokeStyle='rgba(0,0,255,0.3)'; ctx.beginPath(); ctx.arc(pt.x,pt.y,p/50000*map.getZoom(),0,2*Math.PI); ctx.stroke();
-      ctx.strokeStyle='rgba(255,0,0,0.2)'; ctx.beginPath(); ctx.arc(pt.x,pt.y,s/50000*map.getZoom(),0,2*Math.PI); ctx.stroke();
-    } animate();
+    function animate(){
+      requestAnimationFrame(animate);
+      ctx.clearRect(0,0,cw,ch);
+      if(!detailInfo) return;
+      const elapsed = (Date.now() - new Date(latest.time)) / 1000;
+      const pR = elapsed * 6000; const sR = elapsed * 3500;
+      const pt = map.latLngToContainerPoint([detailInfo.hypocenter.latitude, detailInfo.hypocenter.longitude]);
+      ctx.strokeStyle = 'rgba(0,0,255,0.3)'; ctx.beginPath(); ctx.arc(pt.x,pt.y,pR/50000*map.getZoom(),0,2*Math.PI); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,0,0,0.2)'; ctx.beginPath(); ctx.arc(pt.x,pt.y,sR/50000*map.getZoom(),0,2*Math.PI); ctx.stroke();
+    }
+    animate();
+
+    // 初期ロード
+    loadList(); setInterval(loadList,60000);
   </script>
 </body>
 </html>
